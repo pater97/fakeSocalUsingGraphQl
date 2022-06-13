@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -10,9 +11,14 @@ const { graphqlHTTP } = require('express-graphql');
 //importo schema e risolutore per concretizzare le richieste
 const graphQlSchema = require('./graphql/schema')
 const graphQlResolvers = require('./graphql/resolvers')
+//importo il middleware per verificare l'autenticazione
+const auth = require('./middleware/is-auth');
+//importo la funzione per eliminare l'immagine
+const { clearImage } = require('./util/file');
 
+//imposto express
 const app = express();
-
+//imposto il salvataggio dell'immagine
 const fileStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, 'images');
@@ -21,7 +27,7 @@ const fileStorage = multer.diskStorage({
     cb(null, uuidv4())
   }
 });
-
+//creo la validazione per tipo di file immagine
 const fileFilter = (req, file, cb) => {
   if (
     file.mimetype === 'image/png' ||
@@ -36,11 +42,13 @@ const fileFilter = (req, file, cb) => {
 
 // app.use(bodyParser.urlencoded()); // x-www-form-urlencoded <form>
 app.use(bodyParser.json()); // application/json
+//configuro il salvataggio delle immagini
 app.use(
   multer({ storage: fileStorage, fileFilter: fileFilter }).single('image')
 );
+//creo percorso statico per le immagini
 app.use('/images', express.static(path.join(__dirname, 'images')));
-
+//setto tutti gli accessi per l'api
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader(
@@ -53,6 +61,24 @@ app.use((req, res, next) => {
   }
   next();
 });
+//utilizzo il middleware dedito all'autentificazione
+app.use(auth);
+//creo l'endpoin per la memorizzazione del path dell'immaigne
+app.put('/post-image', (req, res, next) => {
+  //verifico che sia autenticato
+  if (!req.isAuth) {
+    throw new Error('Not authenticated!');
+  }
+  if (!req.file) {
+    return res.status(200).json({ message: 'No file provided!' });
+  }
+  if (req.body.oldPath) {
+    clearImage(req.body.oldPath);
+  }
+  return res
+    .status(201)
+    .json({ message: 'File stored.', filePath: req.file.path });
+});
 
 //middleware che gestisce graphQl
 app.use('/graphql',     //indico la rotta
@@ -61,7 +87,7 @@ app.use('/graphql',     //indico la rotta
     rootValue: graphQlResolvers, //il valore della risposta dato dal resolvers
     graphiql:true,         //è un tool che permette di avere un interfaccia grafica visitantdo l'url http://localhost:8080/graphql
     //gestione degli errori
-    formatError(err) {
+    customFormatErrorFn(err) {
       if (!err.originalError) {
         return err;
       }
